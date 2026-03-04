@@ -57,4 +57,4 @@ jobs:
         script: |
           docker stop postgres-users
           docker rm --force postgres-users
-          docker run -d --name postgres-users --network=rede -e POSTGRES_PASSWORD={{ secrets.POSTGRES_PASSWORD }} -e POSTGRES_DB={{ secret.POSTGRES_DB }} -p 5432:5432 weirdessen/users-ci:${{ github.sha }}
+          docker run -d --name postgres-users --network=rede -p 5432:5432 weirdessen/users-ci:${{ github.sha }}
