@@ -48,7 +48,7 @@ jobs:
         context: .
         file: ./Dockerfile
         push: true
-        tags: mathlemos/app_users-ci:${{ github.sha }}
+        tags: mathlemos/users2:${{ github.sha }}
     - name: executing remote ssh commands using password
       uses: appleboy/ssh-action@master
       with:
@@ -59,6 +59,7 @@ jobs:
         script: |
           docker stop users2
           docker rm --force users2
+          docker pull mathlemos/users2:${{ github.sha }}
           docker run -d --name users2 --network rede -p 80:5000 \
           -e POSTGRES_URL=${{ secrets.POSTGRES_URL }} \
           -e POSTGRES_USER=${{ secrets.POSTGRES_USER }} \
