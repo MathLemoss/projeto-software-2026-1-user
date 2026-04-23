@@ -1,11 +1,55 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from sqlalchemy.exc import IntegrityError
+from functools import wraps
 import os
 import requests
+import jwt
+from jwt import PyJWKClient
 
 from db import db
 from models import User
+
+AUTH0_DOMAIN   = os.environ.get("AUTH0_DOMAIN",   "dev-47408b7hxr8r67xb.us.auth0.com")
+AUTH0_AUDIENCE = os.environ.get("AUTH0_AUDIENCE", "https://dev-47408b7hxr8r67xb.us.auth0.com/api/v2/")
+JWKS_URL       = f"https://{AUTH0_DOMAIN}/.well-known/jwks.json"
+ALGORITHMS     = ["RS256"]
+
+jwks_client = PyJWKClient(JWKS_URL)
+
+
+def require_auth(f):
+    """Decorator that validates the Auth0 JWT on every request."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
+            return jsonify({"error": "Authorization header ausente ou inválido"}), 401
+
+        token = auth_header.split(" ", 1)[1]
+
+        try:
+            signing_key = jwks_client.get_signing_key_from_jwt(token)
+            payload = jwt.decode(
+                token,
+                signing_key.key,
+                algorithms=ALGORITHMS,
+                audience=AUTH0_AUDIENCE,
+                issuer=f"https://{AUTH0_DOMAIN}/",
+            )
+        except jwt.ExpiredSignatureError:
+            return jsonify({"error": "Token expirado"}), 401
+        except jwt.InvalidAudienceError:
+            return jsonify({"error": "Audience inválido"}), 401
+        except jwt.InvalidIssuerError:
+            return jsonify({"error": "Issuer inválido"}), 401
+        except Exception as e:
+            return jsonify({"error": f"Token inválido: {str(e)}"}), 401
+
+        request.auth_payload = payload
+        return f(*args, **kwargs)
+
+    return decorated
 
 
 def serialize_user(user):
@@ -26,20 +70,21 @@ def create_app():
     app = Flask(__name__)
     CORS(app)
 
-    postgres_user = os.environ.get("POSTGRES_USER", "appuser")
+    postgres_user     = os.environ.get("POSTGRES_USER",     "appuser")
     postgres_password = os.environ.get("POSTGRES_PASSWORD", "apppass")
-    postgres_url = os.environ.get("POSTGRES_URL", "localhost")
+    postgres_url      = os.environ.get("POSTGRES_URL",      "localhost")
 
     db_uri = f"postgresql://{postgres_user}:{postgres_password}@{postgres_url}:5432/users"
     app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get(
-        "SQLALCHEMY_DATABASE_URI",
-        db_uri,
+        "SQLALCHEMY_DATABASE_URI", db_uri
     )
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
     db.init_app(app)
 
+
     @app.route("/users", methods=["POST"])
+    @require_auth
     def create_user():
         data = request.get_json(silent=True) or {}
 
@@ -53,7 +98,9 @@ def create_app():
             return jsonify({"error": "CEP inválido"}), 400
 
         try:
-            via_cep_response = requests.get(f"https://viacep.com.br/ws/{cep}/json/", timeout=5)
+            via_cep_response = requests.get(
+                f"https://viacep.com.br/ws/{cep}/json/", timeout=5
+            )
         except requests.RequestException:
             return jsonify({"error": "Erro ao consultar CEP"}), 500
 
@@ -61,7 +108,6 @@ def create_app():
             return jsonify({"error": "Erro ao consultar CEP"}), 500
 
         cep_data = via_cep_response.json()
-
         if cep_data.get("erro"):
             return jsonify({"error": "CEP inválido"}), 400
 
@@ -86,16 +132,19 @@ def create_app():
         return jsonify(serialize_user(user)), 201
 
     @app.route("/users/<uuid:user_id>", methods=["GET"])
+    @require_auth
     def get_user(user_id):
         user = User.query.get_or_404(user_id)
         return jsonify(serialize_user(user)), 200
 
     @app.route("/users/<string:email>/email", methods=["GET"])
+    @require_auth
     def get_user_by_email(email):
         user = User.query.filter_by(email=email).first_or_404()
         return jsonify(serialize_user(user)), 200
 
     @app.route("/users/<uuid:user_id>", methods=["DELETE"])
+    @require_auth
     def delete_user(user_id):
         user = User.query.get_or_404(user_id)
         db.session.delete(user)
@@ -103,6 +152,7 @@ def create_app():
         return "", 204
 
     @app.route("/users", methods=["GET"])
+    @require_auth
     def list_users():
         users = User.query.all()
         return jsonify([serialize_user(user) for user in users]), 200
